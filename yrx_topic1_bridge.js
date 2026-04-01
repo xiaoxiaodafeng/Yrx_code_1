@@ -131,17 +131,29 @@ function extractLongestPng(gifPath, outPngPath) {
 }
 
 function parseArgs(argv) {
-  const out = { gif: "", outPng: "runs/topic1_longest_frame.png", value: "" };
+  const out = {
+    gif: "",
+    outPng: "runs/topic1_longest_frame.png",
+    value: "",
+    logo: "",
+    captchaResult: "",
+    forceA: "",
+    cookie: "",
+  };
   for (let i = 3; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === "--gif" && argv[i + 1]) out.gif = argv[++i];
     else if (a === "--out-png" && argv[i + 1]) out.outPng = argv[++i];
     else if (a === "--value" && argv[i + 1]) out.value = String(argv[++i]);
+    else if (a === "--logo" && argv[i + 1]) out.logo = String(argv[++i]);
+    else if (a === "--captcha-result" && argv[i + 1]) out.captchaResult = String(argv[++i]);
+    else if (a === "--force-a" && argv[i + 1]) out.forceA = String(argv[++i]);
+    else if (a === "--cookie" && argv[i + 1]) out.cookie = String(argv[++i]);
   }
   return out;
 }
 
-async function encodeCheckText(value) {
+async function encodeCheckText(value, options = {}) {
   const html = await fetchText(PAGE_URL);
   const scriptSrcs = [
     ...html.matchAll(/<script[^>]*src=["']([^"']+)["'][^>]*><\/script>/gi),
@@ -166,9 +178,27 @@ async function encodeCheckText(value) {
   w.crypto = webcrypto;
   w.alert = () => {};
   w.ModalLayer = { msg() {}, close() {} };
+  w.location.reload = () => {};
   w.atob = (s) => Buffer.from(String(s || ""), "base64").toString("binary");
   w.btoa = (s) => Buffer.from(String(s || ""), "binary").toString("base64");
+  if (options.cookie) {
+    for (const pair of String(options.cookie).split(";")) {
+      const x = pair.trim();
+      if (!x || !x.includes("=")) continue;
+      try {
+        w.document.cookie = x;
+      } catch (_) {}
+    }
+  }
   w.eval(jqueryCode);
+
+  let captchaResult = options.captchaResult || "";
+  if (!captchaResult && options.gif) {
+    try {
+      captchaResult = fs.readFileSync(path.resolve(options.gif)).toString("base64");
+    } catch (_) {}
+  }
+  if (!captchaResult) captchaResult = DUMMY_GIF_BASE64;
 
   let encoded = "";
   w.$.ajax = (opts) => {
@@ -179,8 +209,13 @@ async function encodeCheckText(value) {
     }
     if (typeof opts.success === "function") {
       if ((opts.url || "").includes("/api/user")) opts.success({ status: 0 });
-      else if ((opts.url || "").includes("/match2025/logo")) opts.success(String(Date.now()));
-      else if ((opts.url || "").includes("1_captcha_jpg")) opts.success({ result: DUMMY_GIF_BASE64 });
+      else if ((opts.url || "").includes("/match2025/logo")) opts.success(options.logo || String(Date.now()));
+      else if ((opts.url || "").includes("1_captcha_jpg")) {
+        if (options.forceA && opts.data && typeof opts.data === "object") {
+          opts.data.a = options.forceA;
+        }
+        opts.success({ result: captchaResult });
+      }
       else opts.success({});
     }
     return { abort() {} };
@@ -218,7 +253,7 @@ async function main() {
   if (cmd === "encode-text") {
     const args = parseArgs(process.argv);
     if (!args.value) throw new Error("missing --value");
-    const text = await encodeCheckText(args.value);
+    const text = await encodeCheckText(args.value, args);
     process.stdout.write(JSON.stringify({ ok: true, text }));
     return;
   }

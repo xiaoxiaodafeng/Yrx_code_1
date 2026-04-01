@@ -1,4 +1,5 @@
 import base64
+import argparse
 import json
 import os
 import re
@@ -13,6 +14,7 @@ from requests.exceptions import SSLError
 BASE = "https://match2025.yuanrenxue.cn"
 CAPTCHA_JPG_URL = f"{BASE}/match2025/topic/1_captcha_jpg"
 CAPTCHA_CHECK_URL = f"{BASE}/match2025/topic/1_captcha_check"
+LOGO_URL = f"{BASE}/match2025/logo"
 
 cookies = {
     "Hm_lvt_3e4ffd7a3b6387fe4632831f1230b518": "1774939667",
@@ -41,6 +43,15 @@ headers = {
 }
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Topic1 captcha flow with JS bridge")
+    p.add_argument(
+        "--code",
+        default="",
+        help="If provided, skip OCR and use this recognized code directly for encode-text/check",
+    )
+    return p.parse_args()
 
 
 def node_json(args):
@@ -103,6 +114,7 @@ def ocr_candidates(png_path):
 
 
 def main():
+    args = parse_args()
     os.makedirs("runs", exist_ok=True)
     sess = requests.Session()
     tls_verify = True
@@ -116,34 +128,68 @@ def main():
             tls_verify = False
             print("[tls] cert verify failed, fallback to verify=False")
             return sess.post(url, verify=tls_verify, **kwargs)
+    def safe_get(url, **kwargs):
+        nonlocal tls_verify
+        try:
+            return sess.get(url, verify=tls_verify, **kwargs)
+        except SSLError:
+            tls_verify = False
+            print("[tls] cert verify failed, fallback to verify=False")
+            return sess.get(url, verify=tls_verify, **kwargs)
 
-    a = node_json(["param-a"])["a"]
-    print("[1] a =", a)
+    cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
 
-    r = safe_post(CAPTCHA_JPG_URL, headers=headers, cookies=cookies, data={"a": a}, timeout=30)
-    r.raise_for_status()
-    j = r.json()
+    logo_value = ""
+    if args.code:
+        cand = re.sub(r"[^A-Za-z0-9]", "", args.code).lower()[:4]
+        if len(cand) < 1:
+            print("invalid --code")
+            return
+        print("[1] using provided code:", cand)
+        gif_path = ""
+    else:
+        rg = safe_get(LOGO_URL, headers=headers, cookies=cookies, timeout=30)
+        if rg.status_code == 200:
+            logo_value = rg.text.strip()
+        print("[0] logo =", logo_value or "(empty)")
 
-    gif_path = "runs/topic1_captcha.gif"
-    with open(gif_path, "wb") as f:
-        f.write(decode_b64_loose(j.get("result", "")))
-    print("[2] gif saved:", gif_path)
+        a = node_json(["param-a"])["a"]
+        print("[1] a =", a)
 
-    longest = node_json(["longest-png", "--gif", gif_path, "--out-png", "runs/topic1_longest_frame.png"])
-    png_path = longest["pngPath"]
-    print("[3] longest frame:", longest["frameIndex"], "delay=", longest["delay"], "count=", longest["frameCount"])
+        r = safe_post(CAPTCHA_JPG_URL, headers=headers, cookies=cookies, data={"a": a}, timeout=30)
+        r.raise_for_status()
+        j = r.json()
 
-    candidates = ocr_candidates(png_path)
-    print("[4] candidates:", candidates)
-    if not candidates:
-        print("no candidates")
-        return
+        gif_path = "runs/topic1_captcha.gif"
+        with open(gif_path, "wb") as f:
+            f.write(decode_b64_loose(j.get("result", "")))
+        print("[2] gif saved:", gif_path)
 
-    cand = candidates[0]
-    enc = node_json(["encode-text", "--value", cand])["text"]
+        longest = node_json(["longest-png", "--gif", gif_path, "--out-png", "runs/topic1_longest_frame.png"])
+        png_path = longest["pngPath"]
+        print("[3] longest frame:", longest["frameIndex"], "delay=", longest["delay"], "count=", longest["frameCount"])
+
+        candidates = ocr_candidates(png_path)
+        print("[4] candidates:", candidates)
+        if not candidates:
+            print("no candidates")
+            return
+        cand = candidates[0]
+
+    encode_args = ["encode-text", "--value", cand]
+    if gif_path:
+        encode_args += ["--gif", gif_path]
+    if logo_value:
+        encode_args += ["--logo", logo_value]
+    if not args.code:
+        encode_args += ["--force-a", a]
+    if cookie_str:
+        encode_args += ["--cookie", cookie_str]
+    enc = node_json(encode_args)["text"]
+    print("[5] encrypted text:", enc)
     rc = safe_post(CAPTCHA_CHECK_URL, headers=headers, cookies=cookies, data={"text": enc}, timeout=30)
     rc.raise_for_status()
-    print(f"[5] try {cand} -> {rc.text}")
+    print(f"[6] try {cand} -> {rc.text}")
     try:
         if rc.json().get("success") is True:
             print("PASS:", cand)

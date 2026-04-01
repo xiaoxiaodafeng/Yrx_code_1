@@ -9,6 +9,7 @@
 2. `yrx_topic1_bridge.js`：JS 桥接（`a` / `text` / 最长帧提取）
 3. `topic1_reverse_guide.md`：逆向思路文档
 4. `topic1_technical_doc.md`：技术实现文档
+5. `topic1_full_flow.md`：完整流程与失败排查
 
 ## 运行
 
