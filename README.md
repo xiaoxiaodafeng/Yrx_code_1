@@ -1,6 +1,6 @@
 ﻿# Yrx_code_1
 
-猿人学第三届验证码第一题（Topic1）AI 自动化逆向最小实现。
+猿人学第三届验证码第一题AI 自动化逆向。
 
 ## 文件
 1. `run_topic1_with_bridge.py`：Python 主流程
